@@ -1,0 +1,2 @@
+# Copy to .dev.vars for local development only. Never add DEV_MODE to Cloudflare variables.
+DEV_MODE="true"
