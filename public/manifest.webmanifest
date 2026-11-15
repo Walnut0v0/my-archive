@@ -1,1 +1,16 @@
-{"name":"拾藏 · 我的私人档案","short_name":"拾藏","start_url":"/","display":"standalone","background_color":"#f7f8f5","theme_color":"#587666","icons":[{"src":"/icon.svg","sizes":"any","type":"image/svg+xml","purpose":"any"}]}
+{
+  "name": "拾藏 · 我的私人档案",
+  "short_name": "拾藏",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f7f8f5",
+  "theme_color": "#587666",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}
