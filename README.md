@@ -2,6 +2,17 @@
 
 一个用于个人收藏的网站。React + TypeScript + Cloudflare Workers / D1 / R2，使用原生 workers.dev 地址。
 
+## 当前部署
+
+- 网站：<https://my-archive.c3066872744.workers.dev/>
+- 首次上线：2026-11-20（Asia/Manila）
+- Worker：`my-archive`；D1：`archive-db`；R2：`archive-images`（私有）
+- 解锁密码和登录签名密钥已作为 Worker Secret 配置，不在仓库中保存。
+- 生产构建、独立本地集成测试通过；Cloudflare 已确认当前版本以 100% 流量发布。
+- 发布时执行环境的网络无法正常解析并访问 workers.dev，尚未完成公网端到端验证。
+
+后续更新可运行 `npm run deploy`。当前没有配置 GitHub 推送后自动部署。
+
 - 单列时间流；物料、同人文、同人图三个分类
 - 新增、编辑、删除收藏；标题、作者、原帖、备注、自定义标签
 - 搜索标题、作者、标签、备注及正文；分类、标签、日期筛选
