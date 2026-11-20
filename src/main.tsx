@@ -33,26 +33,15 @@ import {
 } from "lucide-react";
 import { zipSync, strToU8 } from "fflate";
 import "./style.css";
-type Kind = "material" | "fiction" | "art";
-interface Photo {
-  id: string;
-  name: string;
-  mime: string;
-  size: number;
-}
-interface Entry {
-  id: string;
-  type: Kind;
-  title: string;
-  author: string;
-  url: string;
-  notes: string;
-  content: string;
-  tags: string[];
-  starred: boolean;
-  created_at: string;
-  images: Photo[];
-}
+import {
+  type Kind,
+  type Photo,
+  type Entry,
+  publicationLabel,
+  videoFile,
+} from "./model";
+import { api } from "./client";
+import { Editor } from "./Editor";
 interface Stats {
   total: number;
   starred: number;
@@ -60,33 +49,13 @@ interface Stats {
   limit: number;
   counts: { type: Kind; count: number }[];
   tags: { name: string; count: number }[];
+  platforms: string[];
 }
 const kinds = {
   material: { name: "物料", icon: Layers },
   fiction: { name: "同人文", icon: BookOpen },
   art: { name: "同人图", icon: ImageIcon },
 };
-async function api<T = any>(
-  path: string,
-  options: RequestInit = {},
-): Promise<T> {
-  const res = await fetch("/api" + path, {
-    ...options,
-    headers: {
-      ...(options.body instanceof FormData
-        ? {}
-        : { "Content-Type": "application/json" }),
-      ...options.headers,
-    },
-  });
-  const data: any = await res.json();
-  if (!res.ok) {
-    if (res.status === 401 && path !== "/login")
-      window.dispatchEvent(new Event("archive-locked"));
-    throw new Error(data.error || "网络连接失败");
-  }
-  return data;
-}
 const date = (s: string) =>
   new Date(s).toLocaleString("zh-CN", {
     year: "numeric",
@@ -109,16 +78,6 @@ function saveFile(data: Blob, name: string) {
   a.click();
   setTimeout(() => URL.revokeObjectURL(url), 30000);
 }
-const empty = {
-  type: "material" as Kind,
-  title: "",
-  author: "",
-  url: "",
-  notes: "",
-  content: "",
-  tags: [] as string[],
-  starred: false,
-};
 function App() {
   const [locked, setLocked] = useState(false);
   useEffect(() => {
@@ -133,6 +92,7 @@ function App() {
     [query, setQuery] = useState(""),
     [search, setSearch] = useState(""),
     [order, setOrder] = useState("newest"),
+    [basis, setBasis] = useState("created"),
     [from, setFrom] = useState(""),
     [to, setTo] = useState(""),
     [filters, setFilters] = useState(false);
@@ -163,7 +123,7 @@ function App() {
   }, [query]);
   const params = useCallback(
     (offset = 0) => {
-      const p = new URLSearchParams({ offset: String(offset), order });
+      const p = new URLSearchParams({ offset: String(offset), order, basis });
       if (category === "starred") p.set("starred", "1");
       else if (category !== "all") p.set("type", category);
       if (tag) p.set("tag", tag);
@@ -172,7 +132,7 @@ function App() {
       if (to) p.set("to", to);
       return p;
     },
-    [category, tag, search, order, from, to],
+    [category, tag, search, order, from, to, basis],
   );
   const reload = useCallback(async () => {
     setLoading(true);
@@ -270,7 +230,7 @@ function App() {
   async function copy(url: string) {
     try {
       await navigator.clipboard.writeText(url);
-      toast("已复制原帖链接");
+      toast("链接已复制");
     } catch {
       toast("复制失败，请打开原帖后复制地址");
     }
@@ -362,9 +322,7 @@ function App() {
           <span className="brand-icon">
             <Bookmark size={24} />
           </span>
-          <span>
-            拾藏<small>MY LITTLE ARCHIVE</small>
-          </span>
+          <span>拾藏</span>
         </a>
         <p className="sidebar-label">收藏夹</p>
         <nav>
@@ -420,13 +378,13 @@ function App() {
               </button>
             ))
           ) : (
-            <p className="muted tiny">添加收藏时，给喜欢的内容贴个标签。</p>
+            <p className="muted tiny">暂无标签</p>
           )}
         </div>
         <div className="sidebar-bottom">
           <div className="private">
             <Lock size={14} />
-            <span>只属于你的私人空间</span>
+            <span>私人档案</span>
           </div>
           <button className="settings-link" onClick={() => setSettings(true)}>
             <Settings size={17} /> 设置与备份 <ChevronRight size={15} />
@@ -457,7 +415,6 @@ function App() {
         <div className="workspace">
           <section className="page-heading">
             <div>
-              <div className="eyebrow">COLLECT THE THINGS YOU LOVE</div>
               <h1>
                 {title}
                 <span>
@@ -473,7 +430,6 @@ function App() {
                       : "—"}
                 </span>
               </h1>
-              <p>把喜欢的好好收起来，留给以后的自己。</p>
             </div>
             <button className="primary" onClick={() => setEditor("new")}>
               <Plus size={19} /> 新增收藏
@@ -564,17 +520,32 @@ function App() {
             </button>
           )}
           <div className="list-heading">
+            <label className="timeline-basis">
+              时间线{" "}
+              <select
+                aria-label="时间线依据"
+                value={basis}
+                onChange={(e) => setBasis(e.target.value)}
+              >
+                <option value="created">收藏时间</option>
+                <option value="published">发布日期</option>
+              </select>
+            </label>
             <span>
               <span className="status-dot" />{" "}
-              {search ? "搜索结果" : "收藏时间流"}
+              {search
+                ? "搜索结果"
+                : basis === "published"
+                  ? "发布日期时间线"
+                  : "收藏时间线"}
             </span>
             <select
               aria-label="排列顺序"
               value={order}
               onChange={(e) => setOrder(e.target.value)}
             >
-              <option value="newest">最新收藏在前</option>
-              <option value="oldest">最早收藏在前</option>
+              <option value="newest">从新到旧</option>
+              <option value="oldest">从旧到新</option>
             </select>
           </div>
           {error ? (
@@ -589,7 +560,7 @@ function App() {
           ) : loading ? (
             <div className="loading">
               <LoaderCircle className="spin" size={25} />
-              正在翻开你的档案…
+              正在加载…
             </div>
           ) : !items.length ? (
             <section className="empty">
@@ -598,19 +569,15 @@ function App() {
                 <span>✦</span>
               </div>
               <h2>
-                {search || tag || from || to
-                  ? "还没有找到这份收藏"
-                  : "喜欢的事物，值得被留住"}
+                {search || tag || from || to ? "没有匹配的收藏" : "暂无收藏"}
               </h2>
               <p>
                 {search || tag || from || to
                   ? "换一个关键词，或清除筛选再看看。"
-                  : "一段文字、一张图片、一个舍不得关闭的链接。"}
-                <br />
-                {search ? "" : "从第一份收藏开始，慢慢填满这里。"}
+                  : "点击下方按钮添加收藏。"}
               </p>
               <button className="primary" onClick={() => setEditor("new")}>
-                <Plus size={17} /> 添加第一份收藏
+                <Plus size={17} /> 新增收藏
               </button>
               <div className="empty-hint">
                 <Lock size={13} /> 云端保存 · 私人访问 · 多设备同步
@@ -618,147 +585,209 @@ function App() {
             </section>
           ) : (
             <div className="feed">
-              {items.map((e) => {
+              {items.map((e, index) => {
                 const K = kinds[e.type];
                 return (
-                  <article className="card" key={e.id}>
-                    <div className="card-meta">
-                      <span className={"type-icon " + e.type}>
-                        <K.icon size={19} />
-                      </span>
-                      <div>
-                        <strong>{e.author || "我的收藏"}</strong>
-                        <small>{date(e.created_at)} · 收藏</small>
+                  <React.Fragment key={e.id}>
+                    {basis === "published" &&
+                      (index === 0 ||
+                        items[index - 1].published_date.slice(0, 4) !==
+                          e.published_date.slice(0, 4)) && (
+                        <h2 className="timeline-year">
+                          {e.published_date
+                            ? e.published_date.slice(0, 4) + "年"
+                            : "发布日期未填写"}
+                        </h2>
+                      )}
+                    <article className="card">
+                      <div className="card-meta">
+                        <span className={"type-icon " + e.type}>
+                          <K.icon size={19} />
+                        </span>
+                        <div>
+                          <strong>{e.author || "我的收藏"}</strong>
+                          <small>{date(e.created_at)} · 收藏</small>
+                          {e.published_date && (
+                            <time
+                              className="published-date"
+                              dateTime={e.published_date}
+                            >
+                              发布于 {publicationLabel(e.published_date)}
+                            </time>
+                          )}
+                        </div>
+                        <span className={"type-label " + e.type}>{K.name}</span>
+                        <div className="card-menu">
+                          <button
+                            className="icon-button"
+                            aria-label="更多操作"
+                            onClick={() => setMenu(menu === e.id ? "" : e.id)}
+                          >
+                            <MoreHorizontal size={20} />
+                          </button>
+                          {menu === e.id && (
+                            <div className="dropdown">
+                              <button
+                                onClick={() => {
+                                  setEditor(e);
+                                  setMenu("");
+                                }}
+                              >
+                                <Pencil size={15} />
+                                编辑收藏
+                              </button>
+                              <button
+                                onClick={() => {
+                                  setRemove(e);
+                                  setMenu("");
+                                }}
+                              >
+                                <Trash2 size={15} />
+                                删除收藏
+                              </button>
+                            </div>
+                          )}
+                        </div>
                       </div>
-                      <span className={"type-label " + e.type}>{K.name}</span>
-                      <div className="card-menu">
+                      <h2>{e.title}</h2>
+                      {e.notes && <p className="card-notes">{e.notes}</p>}
+                      {e.type === "fiction" && e.content && (
                         <button
-                          className="icon-button"
-                          aria-label="更多操作"
-                          onClick={() => setMenu(menu === e.id ? "" : e.id)}
+                          className="article-preview"
+                          onClick={() => setReader(e)}
                         >
-                          <MoreHorizontal size={20} />
+                          <div className="book-cover">
+                            <BookOpen size={27} />
+                          </div>
+                          <div>
+                            <span>
+                              存档文稿 · {e.content.length.toLocaleString()} 字
+                            </span>
+                            <strong>{e.title}</strong>
+                            <p>{e.content.slice(0, 100)}</p>
+                          </div>
+                          <ChevronRight size={20} />
                         </button>
-                        {menu === e.id && (
-                          <div className="dropdown">
+                      )}
+                      {e.images.length > 0 && (
+                        <div
+                          className={
+                            "photo-grid " +
+                            (e.images.length === 1 ? "single" : "")
+                          }
+                        >
+                          {e.images.slice(0, 9).map((img, i) => (
                             <button
-                              onClick={() => {
-                                setEditor(e);
-                                setMenu("");
-                              }}
+                              key={img.id}
+                              onClick={() =>
+                                setViewer({ images: e.images, index: i })
+                              }
+                              aria-label={"查看附件 " + (i + 1)}
                             >
-                              <Pencil size={15} />
-                              编辑收藏
+                              {videoFile(img.mime) ? (
+                                <span className="video-thumb">
+                                  <video
+                                    src={"/api/images/" + img.id}
+                                    preload="metadata"
+                                    muted
+                                    playsInline
+                                  />
+                                  <span>播放视频</span>
+                                </span>
+                              ) : (
+                                <img
+                                  loading="lazy"
+                                  src={"/api/images/" + img.id}
+                                  alt={img.name}
+                                />
+                              )}
+                              {i === 8 && e.images.length > 9 && (
+                                <span>+{e.images.length - 9}</span>
+                              )}
                             </button>
+                          ))}
+                        </div>
+                      )}
+                      {e.tags.length > 0 && (
+                        <div className="card-tags">
+                          {e.tags.map((t) => (
                             <button
+                              key={t}
                               onClick={() => {
-                                setRemove(e);
-                                setMenu("");
+                                setTag(t);
+                                setCategory("all");
                               }}
                             >
-                              <Trash2 size={15} />
-                              删除收藏
+                              # {t}
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                      <div className="source-links">
+                        {e.links.map((link, i) => (
+                          <div className="source-link" key={i}>
+                            <a href={link.url} target="_blank" rel="noreferrer">
+                              {link.platform}{" "}
+                              {e.links.filter(
+                                (l) => l.platform === link.platform,
+                              ).length > 1
+                                ? e.links
+                                    .slice(0, i + 1)
+                                    .filter((l) => l.platform === link.platform)
+                                    .length
+                                : ""}
+                            </a>
+                            <button
+                              onClick={() => void copy(link.url)}
+                              aria-label={"复制" + link.platform + "链接"}
+                            >
+                              <Copy size={14} />
+                            </button>
+                          </div>
+                        ))}
+                        {e.backup_url && (
+                          <div className="source-link backup">
+                            <a
+                              href={e.backup_url}
+                              target="_blank"
+                              rel="noreferrer"
+                            >
+                              备份链接
+                            </a>
+                            <button
+                              onClick={() => void copy(e.backup_url)}
+                              aria-label="复制备份链接"
+                            >
+                              <Copy size={14} />
                             </button>
                           </div>
                         )}
                       </div>
-                    </div>
-                    <h2>{e.title}</h2>
-                    {e.notes && <p className="card-notes">{e.notes}</p>}
-                    {e.type === "fiction" && e.content && (
-                      <button
-                        className="article-preview"
-                        onClick={() => setReader(e)}
-                      >
-                        <div className="book-cover">
-                          <BookOpen size={27} />
-                        </div>
+                      <footer>
                         <div>
-                          <span>
-                            存档文稿 · {e.content.length.toLocaleString()} 字
-                          </span>
-                          <strong>{e.title}</strong>
-                          <p>{e.content.slice(0, 100)}</p>
-                        </div>
-                        <ChevronRight size={20} />
-                      </button>
-                    )}
-                    {e.images.length > 0 && (
-                      <div
-                        className={
-                          "photo-grid " +
-                          (e.images.length === 1 ? "single" : "")
-                        }
-                      >
-                        {e.images.slice(0, 9).map((img, i) => (
-                          <button
-                            key={img.id}
-                            onClick={() =>
-                              setViewer({ images: e.images, index: i })
-                            }
-                            aria-label={"查看图片 " + (i + 1)}
-                          >
-                            <img
-                              loading="lazy"
-                              src={"/api/images/" + img.id}
-                              alt={img.name}
-                            />
-                            {i === 8 && e.images.length > 9 && (
-                              <span>+{e.images.length - 9}</span>
-                            )}
-                          </button>
-                        ))}
-                      </div>
-                    )}
-                    {e.tags.length > 0 && (
-                      <div className="card-tags">
-                        {e.tags.map((t) => (
-                          <button
-                            key={t}
-                            onClick={() => {
-                              setTag(t);
-                              setCategory("all");
-                            }}
-                          >
-                            # {t}
-                          </button>
-                        ))}
-                      </div>
-                    )}
-                    <footer>
-                      <div>
-                        {e.url && (
-                          <>
-                            <a href={e.url} target="_blank" rel="noreferrer">
-                              <ArrowUpRight size={16} />
-                              查看原帖
-                            </a>
-                            <button onClick={() => void copy(e.url)}>
-                              <Copy size={14} />
-                              <span>复制链接</span>
+                          {e.type === "fiction" && e.content && (
+                            <button onClick={() => setReader(e)}>
+                              <BookOpen size={15} />
+                              阅读
                             </button>
-                          </>
-                        )}
-                        {e.type === "fiction" && e.content && (
-                          <button onClick={() => setReader(e)}>
-                            <BookOpen size={15} />
-                            阅读
-                          </button>
-                        )}
-                      </div>
-                      <button
-                        className={e.starred ? "starred" : ""}
-                        onClick={() => void star(e)}
-                        aria-label={e.starred ? "取消特别喜欢" : "标为特别喜欢"}
-                      >
-                        <Star
-                          size={17}
-                          fill={e.starred ? "currentColor" : "none"}
-                        />
-                        <span>{e.starred ? "特别喜欢" : "喜欢"}</span>
-                      </button>
-                    </footer>
-                  </article>
+                          )}
+                        </div>
+                        <button
+                          className={e.starred ? "starred" : ""}
+                          onClick={() => void star(e)}
+                          aria-label={
+                            e.starred ? "取消特别喜欢" : "标为特别喜欢"
+                          }
+                        >
+                          <Star
+                            size={17}
+                            fill={e.starred ? "currentColor" : "none"}
+                          />
+                          <span>{e.starred ? "特别喜欢" : "喜欢"}</span>
+                        </button>
+                      </footer>
+                    </article>
+                  </React.Fragment>
                 );
               })}
               {more && (
@@ -770,15 +799,11 @@ function App() {
                   {busy ? "正在加载…" : "加载更多收藏"}
                 </button>
               )}
-              <p className="endnote">
-                {more ? "" : "—  每一份喜欢，都有迹可循  —"}
-              </p>
+              <p className="endnote">{more ? "" : "没有更多收藏"}</p>
             </div>
           )}
         </div>
-        <footer className="page-footer">
-          拾藏 <span>·</span> 给喜欢的事物一个家
-        </footer>
+        <footer className="page-footer">拾藏</footer>
       </main>
       {notice && (
         <div role="status" className="toast">
@@ -799,6 +824,8 @@ function App() {
           }}
           setBusy={setBusy}
           busy={busy}
+          knownTags={stats?.tags.map((t) => t.name) || []}
+          knownPlatforms={stats?.platforms || []}
         />
       )}
       {reader && <Reader entry={reader} close={() => setReader(null)} />}
@@ -827,7 +854,7 @@ function App() {
             </button>
             <Trash2 size={28} />
             <h2>删除这份收藏？</h2>
-            <p>“{remove.title}”及其云端图片将被删除。此操作无法撤销。</p>
+            <p>“{remove.title}”及其云端附件将被删除。此操作无法撤销。</p>
             <div className="modal-footer">
               <button
                 className="secondary"
@@ -862,19 +889,20 @@ function App() {
             >
               <X />
             </button>
-            <div className="eyebrow">YOUR PRIVATE SPACE</div>
             <h2>设置与备份</h2>
             <div className="setting-block">
               <h3>
-                <Cloud size={18} /> 云端图片空间
+                <Cloud size={18} /> 云端附件空间
               </h3>
               <p>{size(stats?.bytes || 0)} / 8 GB</p>
               <progress value={stats?.bytes || 0} max={8e9} />
-              <small>达到 8 GB 后停止上传。单张图片最多 15 MB。</small>
+              <small>
+                达到 8 GB 后停止上传。图片最多 15 MB，视频最多 50 MB。
+              </small>
             </div>
             <div className="setting-block">
               <h3>
-                <Download size={18} /> 把喜欢的带走
+                <Download size={18} /> 数据备份
               </h3>
               <p>
                 导出包含正文、标签、原始链接的 JSON 索引，或打包图片和全部记录。
@@ -927,310 +955,6 @@ function App() {
         </div>
       )}
     </>
-  );
-}
-function Editor({
-  entry,
-  close,
-  saved,
-  busy,
-  setBusy,
-}: {
-  entry: Entry | null;
-  close: () => void;
-  saved: () => Promise<void>;
-  busy: boolean;
-  setBusy: (b: boolean) => void;
-}) {
-  const [draft, setDraft] = useState({ ...empty, ...entry }),
-    [tags, setTags] = useState(entry?.tags.join("，") || ""),
-    [files, setFiles] = useState<File[]>([]),
-    [photos, setPhotos] = useState(entry?.images || []),
-    [removed, setRemoved] = useState<string[]>([]),
-    [err, setErr] = useState(""),
-    [progress, setProgress] = useState(""),
-    [savedId, setSavedId] = useState(entry?.id || "");
-  const field = (name: string, v: unknown) =>
-    setDraft((d) => ({ ...d, [name]: v }));
-  const [previews, setPreviews] = useState<string[]>([]);
-  useEffect(() => {
-    const urls = files.map((f) => URL.createObjectURL(f));
-    setPreviews(urls);
-    return () => urls.forEach(URL.revokeObjectURL);
-  }, [files]);
-  async function submit(e: React.FormEvent) {
-    e.preventDefault();
-    setBusy(true);
-    setErr("");
-    try {
-      const payload = {
-        ...draft,
-        tags: tags
-          .split(/[,，\n]/)
-          .map((t) => t.trim())
-          .filter(Boolean),
-      };
-      let id = savedId;
-      if (id)
-        await api("/entries/" + id, {
-          method: "PUT",
-          body: JSON.stringify(payload),
-        });
-      else {
-        const res = await api("/entries", {
-          method: "POST",
-          body: JSON.stringify(payload),
-        });
-        id = res.id;
-        setSavedId(id);
-      }
-      for (const imageId of removed) {
-        await api("/images/" + imageId, { method: "DELETE" });
-        setRemoved((v) => v.filter((x) => x !== imageId));
-      }
-      const remaining = [...files];
-      for (let i = 0; i < files.length; i++) {
-        setProgress(`正在上传图片 ${i + 1} / ${files.length}`);
-        const form = new FormData();
-        form.set("file", files[i]);
-        const photo = await api("/entries/" + id + "/images", {
-          method: "POST",
-          body: form,
-        });
-        setPhotos((v) => [...v, photo]);
-        remaining.shift();
-        setFiles([...remaining]);
-      }
-      await saved();
-    } catch (e) {
-      setErr(
-        (e as Error).message +
-          (savedId ? "（文字可能已保存，重试会继续更新这份收藏）" : ""),
-      );
-    } finally {
-      setBusy(false);
-      setProgress("");
-    }
-  }
-  function addFiles(list: FileList | null) {
-    if (!list) return;
-    const input = [...list];
-    if (files.length + photos.length + input.length > 30) {
-      setErr("每条收藏最多上传 30 张图片");
-      return;
-    }
-    if (input.some((f) => f.size > 15 * 1024 * 1024)) {
-      setErr("单张图片不能超过 15 MB");
-      return;
-    }
-    setFiles((v) => [...v, ...input]);
-  }
-  return (
-    <div className="overlay">
-      <form
-        className="modal editor"
-        role="dialog"
-        aria-modal="true"
-        aria-label={entry ? "编辑收藏" : "新增收藏"}
-        onSubmit={submit}
-      >
-        <header>
-          <div>
-            <div className="eyebrow">SAVE A LITTLE JOY</div>
-            <h2>{entry ? "编辑收藏" : "新增一份喜欢"}</h2>
-          </div>
-          <button
-            type="button"
-            className="icon-button"
-            disabled={busy}
-            onClick={close}
-            aria-label="关闭"
-          >
-            <X />
-          </button>
-        </header>
-        <fieldset disabled={busy}>
-          <div className="kind-picker">
-            {Object.entries(kinds).map(([id, k]) => (
-              <button
-                type="button"
-                className={draft.type === id ? "active" : ""}
-                key={id}
-                onClick={() => field("type", id)}
-              >
-                <k.icon size={18} />
-                {k.name}
-              </button>
-            ))}
-          </div>
-          <label>
-            标题 <span>*</span>
-            <input
-              autoFocus
-              required
-              maxLength={200}
-              value={draft.title}
-              onChange={(e) => field("title", e.target.value)}
-              placeholder="给这份收藏起个名字"
-            />
-          </label>
-          <div className="form-row">
-            <label>
-              原作者 / 发布者
-              <input
-                maxLength={200}
-                value={draft.author}
-                onChange={(e) => field("author", e.target.value)}
-                placeholder="记下创作这份喜欢的人"
-              />
-            </label>
-            <label>
-              原帖链接
-              <input
-                type="url"
-                value={draft.url}
-                maxLength={3000}
-                onChange={(e) => field("url", e.target.value)}
-                placeholder="https://…"
-              />
-            </label>
-          </div>
-          <label>
-            标签
-            <input
-              value={tags}
-              onChange={(e) => setTags(e.target.value)}
-              placeholder="角色、CP、活动… 用逗号分隔"
-            />
-          </label>
-          <label>
-            备注 / 简介
-            <textarea
-              rows={3}
-              value={draft.notes}
-              maxLength={10000}
-              onChange={(e) => field("notes", e.target.value)}
-              placeholder="写下收藏时的心情，或留一点线索"
-            />
-          </label>
-          {draft.type === "fiction" && (
-            <label>
-              文稿正文 <span className="optional">选填 · 纯文本存档</span>
-              <textarea
-                rows={9}
-                value={draft.content}
-                maxLength={1000000}
-                onChange={(e) => field("content", e.target.value)}
-                placeholder="粘贴正文，在站内安静阅读。也可以只保存原帖链接。"
-              />
-              <label className="text-import">
-                <Upload size={14} /> 从 TXT 文件导入
-                <input
-                  type="file"
-                  accept=".txt,text/plain"
-                  onChange={async (e) => {
-                    const f = e.target.files?.[0];
-                    if (f) {
-                      if (f.size > 3_000_000) {
-                        setErr("TXT 文件过大");
-                        return;
-                      }
-                      const text = await f.text();
-                      if (text.length > 1000000) {
-                        setErr("正文最多 100 万字");
-                        return;
-                      }
-                      field("content", text);
-                    }
-                  }}
-                />
-              </label>
-            </label>
-          )}
-          <label>
-            图片{" "}
-            <span className="optional">JPG、PNG、GIF、WebP · 每张 ≤15 MB</span>
-          </label>
-          <div className="upload-grid">
-            {photos.map((p) => (
-              <div key={p.id}>
-                <img src={"/api/images/" + p.id} alt={p.name} />
-                <button
-                  type="button"
-                  aria-label="移除图片"
-                  onClick={() => {
-                    setRemoved((v) => [...v, p.id]);
-                    setPhotos((v) => v.filter((x) => x.id !== p.id));
-                  }}
-                >
-                  <X size={14} />
-                </button>
-              </div>
-            ))}
-            {previews.map((url, i) => (
-              <div key={url}>
-                <img src={url} alt={files[i]?.name} />
-                <button
-                  type="button"
-                  aria-label="移除待上传图片"
-                  onClick={() => setFiles((v) => v.filter((_, j) => j !== i))}
-                >
-                  <X size={14} />
-                </button>
-              </div>
-            ))}
-            <label className="upload-button">
-              <Plus size={24} />
-              <span>添加图片</span>
-              <input
-                type="file"
-                multiple
-                accept="image/jpeg,image/png,image/gif,image/webp"
-                onChange={(e) => {
-                  addFiles(e.target.files);
-                  e.target.value = "";
-                }}
-              />
-            </label>
-          </div>
-          <label className="checkbox">
-            <input
-              type="checkbox"
-              checked={draft.starred}
-              onChange={(e) => field("starred", e.target.checked)}
-            />
-            <Star size={15} /> 标为特别喜欢
-          </label>
-        </fieldset>
-        {err && (
-          <p className="form-error" role="alert">
-            {err}
-          </p>
-        )}
-        <footer className="modal-footer">
-          <span>
-            <Lock size={13} />
-            {progress || "仅自己可见，保存至云端"}
-          </span>
-          <button
-            className="secondary"
-            type="button"
-            disabled={busy}
-            onClick={close}
-          >
-            取消
-          </button>
-          <button className="primary" disabled={busy}>
-            {busy ? (
-              <LoaderCircle className="spin" size={16} />
-            ) : (
-              <Bookmark size={16} />
-            )}{" "}
-            {busy ? "正在保存…" : "保存收藏"}
-          </button>
-        </footer>
-      </form>
-    </div>
   );
 }
 function Reader({ entry, close }: { entry: Entry; close: () => void }) {
@@ -1327,7 +1051,7 @@ function Lightbox({
       className="lightbox"
       role="dialog"
       aria-modal="true"
-      aria-label="图片查看器"
+      aria-label="附件查看器"
     >
       <header>
         <span>
@@ -1351,7 +1075,17 @@ function Lightbox({
           <ChevronLeft size={30} />
         </button>
       )}
-      <img src={"/api/images/" + images[index].id} alt={images[index].name} />
+      {videoFile(images[index].mime) ? (
+        <video
+          key={images[index].id}
+          src={"/api/images/" + images[index].id}
+          controls
+          playsInline
+          autoPlay
+        />
+      ) : (
+        <img src={"/api/images/" + images[index].id} alt={images[index].name} />
+      )}
       {images.length > 1 && (
         <button className="image-next" onClick={next} aria-label="下一张">
           <ChevronRight size={30} />
@@ -1389,12 +1123,6 @@ function Login({ unlocked }: { unlocked: () => void }) {
           <Bookmark size={29} />
         </div>
         <h1>拾藏</h1>
-        <div className="eyebrow">MY LITTLE ARCHIVE</div>
-        <p>
-          把喜欢的好好收起来，
-          <br />
-          留给以后的自己。
-        </p>
         <label>
           输入密码，打开我的档案
           <input
@@ -1421,9 +1149,6 @@ function Login({ unlocked }: { unlocked: () => void }) {
             {error}
           </p>
         )}
-        <small>
-          <Cloud size={13} /> 一个密码，手机电脑随时收藏
-        </small>
       </form>
     </div>
   );

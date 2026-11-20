@@ -1,4 +1,6 @@
 import { SignJWT, jwtVerify } from "jose";
+import { publication, platformFor } from "../src/model";
+import { readTitle } from "./metadata";
 interface Env {
   DB: D1Database;
   IMAGES: R2Bucket;
@@ -8,7 +10,8 @@ interface Env {
   DEV_MODE?: string;
 }
 const LIMIT = 8_000_000_000,
-  MAX_IMAGE = 15 * 1024 * 1024;
+  MAX_IMAGE = 15 * 1024 * 1024,
+  MAX_VIDEO = 50 * 1024 * 1024;
 const json = (data: unknown, status = 200) =>
   Response.json(data, { status, headers: { "Cache-Control": "no-store" } });
 class HttpError extends Error {
@@ -68,14 +71,41 @@ async function body(req: Request) {
 function normalize(b: Record<string, unknown>) {
   if (!["material", "fiction", "art"].includes(String(b.type)))
     fail(400, "请选择收藏类型");
-  const url = clean(b.url, 3000);
-  if (url) {
-    try {
-      if (!["https:", "http:"].includes(new URL(url).protocol))
-        fail(400, "仅支持 http 或 https 原帖链接");
-    } catch {
-      fail(400, "原帖链接无效");
+  function linkUrl(value: unknown) {
+    const url = clean(value, 3000);
+    if (url) {
+      try {
+        if (!["http:", "https:"].includes(new URL(url).protocol))
+          fail(400, "链接仅支持 http 或 https");
+      } catch {
+        fail(400, "链接无效");
+      }
     }
+    return url;
+  }
+  const links = Array.isArray(b.links)
+    ? b.links
+        .map((l: any) => ({
+          platform: clean(l?.platform, 60, true),
+          url: linkUrl(l?.url),
+        }))
+        .filter((l) => l.url)
+    : b.url
+      ? [
+          {
+            platform: platformFor(String(b.url)) || "原帖",
+            url: linkUrl(b.url),
+          },
+        ]
+      : [];
+  if (links.length > 50) fail(400, "每条收藏最多保存 50 个原帖链接");
+  const url = links[0]?.url || "";
+  const backup_url = linkUrl(b.backup_url);
+  let published;
+  try {
+    published = publication(clean(b.published_date, 10));
+  } catch (e) {
+    fail(400, (e as Error).message);
   }
   const tags = Array.isArray(b.tags)
     ? [...new Set(b.tags.map((t) => clean(t, 40)).filter(Boolean))]
@@ -86,6 +116,11 @@ function normalize(b: Record<string, unknown>) {
     title: clean(b.title, 200, true),
     author: clean(b.author, 200),
     url,
+    links: JSON.stringify(links),
+    backup_url,
+    published_date: published.value,
+    published_start: published.start,
+    published_end: published.end,
     notes: clean(b.notes, 10000),
     content: clean(b.content, 1_000_000),
     tags: JSON.stringify(tags),
@@ -109,6 +144,7 @@ async function inflate(env: Env, rows: Record<string, unknown>[]) {
   return rows.map((r) => ({
     ...r,
     tags: JSON.parse(String(r.tags)),
+    links: JSON.parse(String(r.links || "[]")),
     starred: !!r.starred,
     images: results.filter((i) => i.entry_id === r.id),
   }));
@@ -120,6 +156,20 @@ function imageMime(b: Uint8Array) {
   const s = new TextDecoder().decode(b.slice(0, 12));
   if (s.startsWith("GIF87a") || s.startsWith("GIF89a")) return "image/gif";
   if (s.startsWith("RIFF") && s.slice(8) === "WEBP") return "image/webp";
+  if (
+    b.length >= 12 &&
+    s.slice(4, 8) === "ftyp" &&
+    ["isom", "iso2", "mp41", "mp42", "avc1", "M4V "].includes(s.slice(8, 12))
+  )
+    return "video/mp4";
+  if (
+    b[0] === 0x1a &&
+    b[1] === 0x45 &&
+    b[2] === 0xdf &&
+    b[3] === 0xa3 &&
+    new TextDecoder().decode(b).includes("webm")
+  )
+    return "video/webm";
   return null;
 }
 async function api(req: Request, env: Env) {
@@ -132,12 +182,21 @@ async function api(req: Request, env: Env) {
     if (req.headers.get("Sec-Fetch-Site") === "cross-site")
       fail(403, "不允许跨站操作。");
   }
+  if (p === "/api/metadata" && method === "POST") {
+    const input = await body(req);
+    try {
+      const title = await readTitle(clean(input.url, 3000, true));
+      return json({ title, message: title ? "" : "无法读取标题，请手动填写" });
+    } catch {
+      return json({ title: "", message: "无法读取标题，请手动填写" });
+    }
+  }
   if (p === "/api/stats" && method === "GET") {
     const counts = await env.DB.prepare(
       "SELECT type,COUNT(*) AS count FROM entries GROUP BY type",
     ).all();
     const tags = await env.DB.prepare(
-      "SELECT j.value AS name, COUNT(*) AS count FROM entries e, json_each(e.tags) j GROUP BY j.value ORDER BY count DESC,name LIMIT 100",
+      "SELECT j.value AS name, COUNT(*) AS count FROM entries e, json_each(e.tags) j GROUP BY j.value ORDER BY count DESC,name",
     ).all();
     const usage = await env.DB.prepare(
       "SELECT bytes FROM storage_usage WHERE id=1",
@@ -148,6 +207,11 @@ async function api(req: Request, env: Env) {
     return json({
       counts: counts.results,
       tags: tags.results,
+      platforms: (
+        await env.DB.prepare(
+          "SELECT DISTINCT json_extract(j.value,'$.platform') AS name FROM entries e,json_each(e.links) j ORDER BY name",
+        ).all()
+      ).results.map((r) => r.name),
       bytes: usage?.bytes || 0,
       limit: LIMIT,
       ...total,
@@ -178,22 +242,27 @@ async function api(req: Request, env: Env) {
       const pattern = "%" + q.replace(/[\\%_]/g, "\\$&") + "%";
       args.push(...Array(5).fill(pattern));
     }
+    const published = u.searchParams.get("basis") === "published";
     const from = u.searchParams.get("from"),
       to = u.searchParams.get("to");
     if (from && /^\d{4}-\d\d-\d\d$/.test(from)) {
-      clauses.push("created_at>=?");
+      clauses.push(published ? "published_end>=?" : "created_at>=?");
       args.push(from);
     }
     if (to && /^\d{4}-\d\d-\d\d$/.test(to)) {
-      clauses.push("created_at<?");
-      args.push(to + "T23:59:59.999Z");
+      clauses.push(
+        published
+          ? "published_start<=? AND published_date<>''"
+          : "substr(created_at,1,10)<=?",
+      );
+      args.push(to);
     }
     const where = clauses.length ? " WHERE " + clauses.join(" AND ") : "";
     const offset = Math.max(0, Number(u.searchParams.get("offset")) || 0),
       limit = 30;
     const order = u.searchParams.get("order") === "oldest" ? "ASC" : "DESC";
     const rows = await env.DB.prepare(
-      `SELECT * FROM entries${where} ORDER BY created_at ${order},id ${order} LIMIT ? OFFSET ?`,
+      `SELECT * FROM entries${where} ORDER BY ${published ? "(published_date='') ASC,published_start " + order + ",length(published_date) ASC," : ""} created_at ${order},id ${order} LIMIT ? OFFSET ?`,
     )
       .bind(...args, limit + 1, offset)
       .all();
@@ -217,7 +286,7 @@ async function api(req: Request, env: Env) {
       id = crypto.randomUUID(),
       now = new Date().toISOString();
     await env.DB.prepare(
-      "INSERT INTO entries(id,type,title,author,url,notes,content,tags,starred,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+      "INSERT INTO entries(id,type,title,author,url,notes,content,tags,starred,created_at,updated_at,links,backup_url,published_date,published_start,published_end) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
     )
       .bind(
         id,
@@ -231,6 +300,11 @@ async function api(req: Request, env: Env) {
         b.starred,
         now,
         now,
+        b.links,
+        b.backup_url,
+        b.published_date,
+        b.published_start,
+        b.published_end,
       )
       .run();
     return json({ id }, 201);
@@ -242,7 +316,7 @@ async function api(req: Request, env: Env) {
     if (method === "PUT") {
       const b = normalize(await body(req));
       await env.DB.prepare(
-        "UPDATE entries SET type=?,title=?,author=?,url=?,notes=?,content=?,tags=?,starred=?,updated_at=? WHERE id=?",
+        "UPDATE entries SET type=?,title=?,author=?,url=?,notes=?,content=?,tags=?,starred=?,updated_at=?,links=?,backup_url=?,published_date=?,published_start=?,published_end=? WHERE id=?",
       )
         .bind(
           b.type,
@@ -254,6 +328,11 @@ async function api(req: Request, env: Env) {
           b.tags,
           b.starred,
           new Date().toISOString(),
+          b.links,
+          b.backup_url,
+          b.published_date,
+          b.published_start,
+          b.published_end,
           id,
         )
         .run();
@@ -277,15 +356,17 @@ async function api(req: Request, env: Env) {
   const upload = p.match(/^\/api\/entries\/([a-f0-9-]+)\/images$/);
   if (upload && method === "POST") {
     await entry(env, upload[1]);
-    if (Number(req.headers.get("Content-Length")) > MAX_IMAGE + 65536)
-      fail(413, "每张图片最多 15 MB");
+    if (Number(req.headers.get("Content-Length")) > MAX_VIDEO + 65536)
+      fail(413, "文件过大：图片最多 15 MB，视频最多 50 MB");
     const data = await req.formData(),
       file = data.get("file");
-    if (!(file instanceof File) || !file.size || file.size > MAX_IMAGE)
-      fail(413, "请选择 15 MB 以内的图片");
-    const bytes = new Uint8Array(await file.arrayBuffer()),
+    if (!(file instanceof File) || !file.size || file.size > MAX_VIDEO)
+      fail(413, "请选择图片（15 MB 以内）或视频（50 MB 以内）");
+    const bytes = new Uint8Array(await file.slice(0, 4096).arrayBuffer()),
       mime = imageMime(bytes);
-    if (!mime) fail(400, "支持 JPG、PNG、GIF 和 WebP 图片，请先转换其他格式");
+    if (!mime) fail(400, "支持 JPG、PNG、GIF、WebP 图片和 MP4、WebM 视频");
+    if (mime.startsWith("image/") && file.size > MAX_IMAGE)
+      fail(413, "图片最多 15 MB");
     const id = crypto.randomUUID(),
       now = new Date().toISOString();
     try {
@@ -296,11 +377,13 @@ async function api(req: Request, env: Env) {
         .run();
     } catch (e) {
       if (String(e).includes("CHECK constraint"))
-        fail(413, "图片空间已达到 8 GB 上限");
+        fail(413, "附件空间已达到 8 GB 上限");
       throw e;
     }
     try {
-      await env.IMAGES.put(id, bytes, { httpMetadata: { contentType: mime } });
+      await env.IMAGES.put(id, file.stream(), {
+        httpMetadata: { contentType: mime },
+      });
     } catch (e) {
       await env.DB.prepare("DELETE FROM images WHERE id=?").bind(id).run();
       throw e;
@@ -314,15 +397,42 @@ async function api(req: Request, env: Env) {
       .first();
     if (!row) fail(404, "图片不存在");
     if (method === "GET") {
-      const object = await env.IMAGES.get(image[1]);
-      if (!object) fail(404, "图片文件未找到");
-      return new Response(object.body, {
-        headers: {
-          "Content-Type": String(row!.mime),
-          "Cache-Control": "private, no-store",
-          "X-Content-Type-Options": "nosniff",
-        },
-      });
+      const headers: Record<string, string> = {
+        "Content-Type": String(row.mime),
+        "Cache-Control": "private, no-store",
+        "X-Content-Type-Options": "nosniff",
+        "Accept-Ranges": "bytes",
+      };
+      const range = req.headers.get("Range");
+      const total = Number(row.size);
+      let options: R2GetOptions | undefined,
+        status = 200;
+      if (range) {
+        const m = range.match(/^bytes=(\d*)-(\d*)$/);
+        if (!m || (!m[1] && !m[2]))
+          return new Response(null, {
+            status: 416,
+            headers: { "Content-Range": `bytes */${total}` },
+          });
+        let start = m[1] ? Number(m[1]) : Math.max(0, total - Number(m[2]));
+        const end = m[1]
+          ? m[2]
+            ? Math.min(total - 1, Number(m[2]))
+            : total - 1
+          : total - 1;
+        if (start >= total || end < start)
+          return new Response(null, {
+            status: 416,
+            headers: { "Content-Range": `bytes */${total}` },
+          });
+        options = { range: { offset: start, length: end - start + 1 } };
+        status = 206;
+        headers["Content-Range"] = `bytes ${start}-${end}/${total}`;
+        headers["Content-Length"] = String(end - start + 1);
+      } else headers["Content-Length"] = String(total);
+      const object = await env.IMAGES.get(image[1], options);
+      if (!object || !("body" in object)) fail(404, "附件文件未找到");
+      return new Response(object.body, { status, headers });
     }
     if (method === "DELETE") {
       await env.IMAGES.delete(image[1]);
@@ -390,7 +500,7 @@ export default {
       response.headers.set("Cache-Control", "private, no-store");
       response.headers.set(
         "Content-Security-Policy",
-        "default-src 'self'; img-src 'self' blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; font-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'",
+        "default-src 'self'; img-src 'self' blob:; media-src 'self' blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; font-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'",
       );
       return response;
     } catch (e) {

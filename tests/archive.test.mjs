@@ -25,6 +25,28 @@ test("password sessions, CRUD, search, private image storage and export", async 
         SESSION_SECRET: "test-only-session-secret-32-characters",
       },
       serviceBindings: { ASSETS: () => new Response("static shell") },
+      outboundService: async (req) => {
+        const u = new URL(req.url);
+        if (u.hostname === "cloudflare-dns.com")
+          return Response.json({
+            Answer:
+              u.searchParams.get("type") === "AAAA"
+                ? []
+                : [{ type: 1, data: "93.184.216.34" }],
+          });
+        if (u.hostname === "example.org") {
+          if (u.pathname === "/redirect")
+            return new Response(null, {
+              status: 302,
+              headers: { Location: "http://127.0.0.1/private" },
+            });
+          return new Response(
+            '<html><head><title>普通标题</title><meta property="og:title" content="测试 &amp; 自动标题"></head></html>',
+            { headers: { "Content-Type": "text/html" } },
+          );
+        }
+        throw new Error("Unexpected external request: " + u.hostname);
+      },
     }),
   );
   try {
@@ -35,6 +57,28 @@ test("password sessions, CRUD, search, private image storage and export", async 
         " ",
       ),
     );
+    await db
+      .prepare(
+        "INSERT INTO entries(id,type,title,url,created_at,updated_at) VALUES('legacy','material','旧收藏','https://weibo.com/legacy','2020-01-01','2020-01-01')",
+      )
+      .run();
+    await db.exec(
+      (await readFile("migrations/0002_sources_dates.sql", "utf8")).replace(
+        /\n/g,
+        " ",
+      ),
+    );
+    assert.equal(
+      JSON.parse(
+        (
+          await db
+            .prepare("SELECT links FROM entries WHERE id='legacy'")
+            .first()
+        ).links,
+      )[0].platform,
+      "微博",
+    );
+    await db.prepare("DELETE FROM entries WHERE id='legacy'").run();
     const request = async (path, opts = {}) => {
       if (opts.body instanceof FormData) {
         const serialized = new Request("https://archive.test", {
@@ -162,6 +206,113 @@ test("password sessions, CRUD, search, private image storage and export", async 
       ).status,
       400,
     );
+    const sources = [
+      { platform: "微博", url: "https://weibo.com/1" },
+      { platform: "微博", url: "https://weibo.com/2" },
+      { platform: "自定义平台", url: "https://example.org/3" },
+    ];
+    await api("/entries/" + id, {
+      method: "PUT",
+      body: JSON.stringify({
+        ...record,
+        links: sources,
+        backup_url: "https://weibo.com/backup",
+        published_date: "2020-02",
+      }),
+    });
+    let saved = (await api("/entries")).data.items[0];
+    assert.deepEqual(saved.links, sources);
+    assert.equal(saved.backup_url, "https://weibo.com/backup");
+    assert.equal(saved.published_date, "2020-02");
+    assert.equal(
+      (await api("/entries?basis=published&from=2020-02-29&to=2020-02-29")).data
+        .items.length,
+      1,
+    );
+    assert.equal(
+      (await api("/entries?basis=published&from=2020-03-01")).data.items.length,
+      0,
+    );
+    assert.equal(
+      (
+        await api("/entries/" + id, {
+          method: "PUT",
+          body: JSON.stringify({ ...record, published_date: "2021-02-29" }),
+        })
+      ).status,
+      400,
+    );
+    assert.equal(
+      (
+        await api("/entries/" + id, {
+          method: "PUT",
+          body: JSON.stringify({ ...record, published_date: "2020-13" }),
+        })
+      ).status,
+      400,
+    );
+    const yearId = (
+      await api("/entries", {
+        method: "POST",
+        body: JSON.stringify({ ...record, published_date: "2019" }),
+      })
+    ).data.id;
+    assert.deepEqual(
+      (await api("/entries?basis=published&order=oldest")).data.items.map(
+        (e) => e.published_date,
+      ),
+      ["2019", "2020-02"],
+    );
+    assert.equal(
+      (await api("/entries?basis=published&from=2019-06-01&to=2019-06-01")).data
+        .items[0].id,
+      yearId,
+    );
+    await api("/entries/" + yearId, { method: "DELETE" });
+    const videoData = Uint8Array.from([
+      0, 0, 0, 24, 102, 116, 121, 112, 105, 115, 111, 109, 0, 0, 0, 0,
+    ]);
+    const videoForm = new FormData();
+    videoForm.set(
+      "file",
+      new Blob([videoData], { type: "video/mp4" }),
+      "movie.mp4",
+    );
+    const uploadedVideo = await api("/entries/" + id + "/images", {
+      method: "POST",
+      body: videoForm,
+    });
+    assert.equal(uploadedVideo.status, 201);
+    assert.equal(uploadedVideo.data.mime, "video/mp4");
+    const range = await request("/api/images/" + uploadedVideo.data.id, {
+      headers: { Cookie: cookie, Range: "bytes=4-11" },
+    });
+    assert.equal(range.status, 206);
+    assert.equal(range.headers.get("content-range"), "bytes 4-11/16");
+    assert.equal(
+      new TextDecoder().decode(await range.arrayBuffer()),
+      "ftypisom",
+    );
+    const invalidRange = await request("/api/images/" + uploadedVideo.data.id, {
+      headers: { Cookie: cookie, Range: "bytes=50-60" },
+    });
+    assert.equal(invalidRange.status, 416);
+    assert.equal((await api("/stats")).data.bytes, 28);
+    const titleResult = await api("/metadata", {
+      method: "POST",
+      body: JSON.stringify({ url: "https://example.org/item" }),
+    });
+    assert.equal(titleResult.data.title, "测试 & 自动标题");
+    const redirected = await api("/metadata", {
+      method: "POST",
+      body: JSON.stringify({ url: "https://example.org/redirect" }),
+    });
+    assert.equal(redirected.data.title, "");
+    const metadata = await api("/metadata", {
+      method: "POST",
+      body: JSON.stringify({ url: "http://127.0.0.1/admin" }),
+    });
+    assert.equal(metadata.data.title, "");
     const backup = (await api("/export")).data;
     assert.equal(backup.entries[0].content, record.content);
     assert.equal(backup.entries[0].images[0].id, imageId);

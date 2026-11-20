@@ -18,6 +18,8 @@ for (const entry of archive.entries)
         "image/png": "png",
         "image/webp": "webp",
         "image/gif": "gif",
+        "video/mp4": "mp4",
+        "video/webm": "webm",
       }[image.mime] || "bin";
     const output = path.resolve(outPath, image.id + "." + ext);
     const result = spawnSync(
