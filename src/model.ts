@@ -2,13 +2,14 @@ export type SourceLink = { platform: string; url: string };
 export const platformsFor = (kind: string) =>
   kind === "fiction"
     ? ["微博", "Lofter", "AO3", "小红书"]
-    : ["小红书", "微博", "bilibili", "豆瓣"];
+    : ["小红书", "微博", "bilibili", "豆瓣", "抖音"];
 export function platformFor(url: string) {
   try {
     const h = new URL(url).hostname.toLowerCase();
     for (const [domains, name] of [
       ["weibo.com,weibo.cn", "微博"],
       ["xiaohongshu.com,xhslink.com", "小红书"],
+      ["douyin.com,iesdouyin.com", "抖音"],
       ["bilibili.com,b23.tv", "bilibili"],
       ["douban.com", "豆瓣"],
       ["lofter.com", "Lofter"],

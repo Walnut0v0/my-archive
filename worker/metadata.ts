@@ -51,7 +51,7 @@ async function publicHost(host: string) {
   )
     throw new Error("网页地址无法读取");
 }
-export async function readTitle(raw: string) {
+export async function readPageMetadata(raw: string) {
   let url = validUrl(raw);
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 10000);
@@ -72,10 +72,10 @@ export async function readTitle(raw: string) {
       }
       if (!r.ok || !r.headers.get("content-type")?.includes("html")) {
         await r.body?.cancel();
-        return "";
+        return { title: "", author: "" };
       }
       const reader = r.body?.getReader();
-      if (!reader) return "";
+      if (!reader) return { title: "", author: "" };
       let size = 0;
       const chunks: Uint8Array[] = [];
       try {
@@ -90,7 +90,8 @@ export async function readTitle(raw: string) {
         await reader.cancel();
       }
       let title = "",
-        og = "";
+        og = "",
+        author = "";
       const bytes = new Uint8Array(size);
       let offset = 0;
       for (const c of chunks) {
@@ -111,6 +112,12 @@ export async function readTitle(raw: string) {
               )
             )
               og ||= e.getAttribute("content") || "";
+            if (
+              ["author", "article:author", "twitter:creator"].includes(
+                e.getAttribute("name") || e.getAttribute("property") || "",
+              )
+            )
+              author ||= e.getAttribute("content") || "";
           },
         })
         .transform(
@@ -126,10 +133,15 @@ export async function readTitle(raw: string) {
       return /just a moment|access denied|security verification|验证码|安全验证|登录|登录后|login|sign in/i.test(
         result,
       )
-        ? ""
-        : result;
+        ? { title: "", author: "" }
+        : {
+            title: result,
+            author: /^https?:/i.test(author)
+              ? ""
+              : decodeHTML(author).trim().slice(0, 200),
+          };
     }
-    return "";
+    return { title: "", author: "" };
   } finally {
     clearTimeout(timer);
   }

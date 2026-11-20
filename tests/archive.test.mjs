@@ -41,7 +41,7 @@ test("password sessions, CRUD, search, private image storage and export", async 
               headers: { Location: "http://127.0.0.1/private" },
             });
           return new Response(
-            '<html><head><title>普通标题</title><meta property="og:title" content="测试 &amp; 自动标题"></head></html>',
+            '<html><head><title>普通标题</title><meta property="og:title" content="测试 &amp; 自动标题"><meta name="author" content="测试作者"></head></html>',
             { headers: { "Content-Type": "text/html" } },
           );
         }
@@ -353,6 +353,7 @@ test("password sessions, CRUD, search, private image storage and export", async 
       body: JSON.stringify({ url: "https://example.org/item" }),
     });
     assert.equal(titleResult.data.title, "测试 & 自动标题");
+    assert.equal(titleResult.data.author, "测试作者");
     const redirected = await api("/metadata", {
       method: "POST",
       body: JSON.stringify({ url: "https://example.org/redirect" }),

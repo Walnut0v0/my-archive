@@ -9,6 +9,7 @@ import {
   Copy,
 } from "lucide-react";
 import { api } from "./client";
+import { extractSharedUrl, parseSharedText } from "./share";
 import {
   type Entry,
   type Kind,
@@ -74,7 +75,9 @@ export function Editor({
   const titleRef = useRef(draft.title),
     attempted = useRef(new Set<string>()),
     readingCount = useRef(0);
+  const authorRef = useRef(draft.author);
   titleRef.current = draft.title;
+  authorRef.current = draft.author;
   const field = (key: string, value: unknown) =>
     setDraft((d) => ({ ...d, [key]: value }));
   useEffect(() => {
@@ -83,24 +86,30 @@ export function Editor({
     return () => urls.forEach(URL.revokeObjectURL);
   }, [files]);
   async function getTitle(url: string) {
-    if (titleRef.current.trim()) {
-      setMetadataNote("标题已填写；如需自动读取，请先清空标题。");
+    if (titleRef.current.trim() && authorRef.current.trim()) {
+      setMetadataNote("标题和作者已填写，可以自行修改。");
       return;
     }
     readingCount.current++;
     setReading(true);
-    setMetadataNote("正在读取网页标题…");
+    setMetadataNote("正在读取标题和作者…");
     try {
       const data = await api("/metadata", {
         method: "POST",
         body: JSON.stringify({ url }),
       });
-      if (data.title && !titleRef.current.trim()) {
-        setDraft((d) => (d.title.trim() ? d : { ...d, title: data.title }));
-        setMetadataNote("已读取标题，可以自行修改。");
-      } else if (!data.title) setMetadataNote("未能读取标题，请手动填写。");
+      setDraft((d) => ({
+        ...d,
+        title: d.title.trim() ? d.title : data.title || "",
+        author: d.author.trim() ? d.author : data.author || "",
+      }));
+      setMetadataNote(
+        data.title || data.author
+          ? "已读取信息，可以自行修改。"
+          : "未能读取更多信息，请手动填写。",
+      );
     } catch {
-      setMetadataNote("未能读取标题，请手动填写。");
+      setMetadataNote("未能读取更多信息，请手动填写。");
     } finally {
       if (--readingCount.current === 0) setReading(false);
     }
@@ -110,13 +119,13 @@ export function Editor({
     const url = links.find(
       (l) => /^https?:\/\//.test(l.url) && !attempted.current.has(l.url),
     )?.url;
-    if (!url || draft.title.trim()) return;
+    if (!url || (draft.title.trim() && draft.author.trim())) return;
     const t = setTimeout(() => {
       attempted.current.add(url);
       void getTitle(url);
     }, 650);
     return () => clearTimeout(t);
-  }, [linkKey, draft.title]);
+  }, [linkKey, draft.title, draft.author]);
   function addTag(value: string) {
     const t = value.trim();
     if (!t) return;
@@ -169,6 +178,21 @@ export function Editor({
   }
   function changeLink(i: number, value: string) {
     setLinks((v) => v.map((l, j) => (j === i ? { ...l, url: value } : l)));
+  }
+  function pasteSource(e: React.ClipboardEvent<HTMLInputElement>, i: number) {
+    const raw =
+      e.clipboardData.getData("text/plain") || e.clipboardData.getData("text");
+    const info = parseSharedText(raw);
+    if (!info.url) return;
+    e.preventDefault();
+    changeLink(i, info.url);
+    setDraft((d) => ({
+      ...d,
+      title: d.title.trim() ? d.title : info.title,
+      author: d.author.trim() ? d.author : info.author,
+    }));
+    if (info.title || info.author)
+      setMetadataNote("已从分享文案提取信息，可以自行修改。");
   }
   function addCustom() {
     const name = custom.trim();
@@ -331,12 +355,13 @@ export function Editor({
                   type="url"
                   required
                   maxLength={3000}
-                  placeholder="https://…"
+                  placeholder="粘贴链接或平台分享文案"
                   value={l.url}
                   onChange={(e) => changeLink(i, e.target.value)}
-                  onPaste={(e) => {
-                    const text = e.clipboardData.getData("text").trim();
-                    if (/^https?:\/\//.test(text)) changeLink(i, text);
+                  onPaste={(e) => pasteSource(e, i)}
+                  onBlur={(e) => {
+                    const url = extractSharedUrl(e.target.value);
+                    if (url) changeLink(i, url);
                   }}
                 />
                 <button
@@ -363,7 +388,7 @@ export function Editor({
                   disabled={reading || !l.url}
                   onClick={() => void getTitle(l.url)}
                 >
-                  读取标题
+                  读取信息
                 </button>
               </div>
             ))}
@@ -401,6 +426,20 @@ export function Editor({
                 maxLength={3000}
                 value={draft.backup_url}
                 onChange={(e) => field("backup_url", e.target.value)}
+                onPaste={(e) => {
+                  const url = extractSharedUrl(
+                    e.clipboardData.getData("text/plain") ||
+                      e.clipboardData.getData("text"),
+                  );
+                  if (url) {
+                    e.preventDefault();
+                    field("backup_url", url);
+                  }
+                }}
+                onBlur={(e) => {
+                  const url = extractSharedUrl(e.target.value);
+                  if (url) field("backup_url", url);
+                }}
                 placeholder="例如仅自己可见的微博链接"
               />
             </label>

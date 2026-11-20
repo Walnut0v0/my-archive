@@ -1,6 +1,7 @@
 import { SignJWT, jwtVerify } from "jose";
 import { publication, platformFor } from "../src/model";
-import { readTitle } from "./metadata";
+import { readPageMetadata } from "./metadata";
+import { extractSharedUrl, parseSharedText } from "../src/share";
 interface Env {
   DB: D1Database;
   IMAGES: R2Bucket;
@@ -72,7 +73,8 @@ function normalize(b: Record<string, unknown>) {
   if (!["material", "fiction", "art"].includes(String(b.type)))
     fail(400, "请选择收藏类型");
   function linkUrl(value: unknown) {
-    const url = clean(value, 3000);
+    const raw = clean(value, 10000);
+    const url = clean(extractSharedUrl(raw) || raw, 3000);
     if (url) {
       try {
         if (!["http:", "https:"].includes(new URL(url).protocol))
@@ -185,10 +187,24 @@ async function api(req: Request, env: Env) {
   if (p === "/api/metadata" && method === "POST") {
     const input = await body(req);
     try {
-      const title = await readTitle(clean(input.url, 3000, true));
-      return json({ title, message: title ? "" : "无法读取标题，请手动填写" });
+      const shared = parseSharedText(clean(input.url, 10000, true));
+      if (shared.title && shared.author) return json(shared);
+      let page = { title: "", author: "" };
+      try {
+        page = await readPageMetadata(
+          shared.url || clean(input.url, 3000, true),
+        );
+      } catch {}
+      return json({
+        title: shared.title || page.title,
+        author: shared.author || page.author,
+      });
     } catch {
-      return json({ title: "", message: "无法读取标题，请手动填写" });
+      return json({
+        title: "",
+        author: "",
+        message: "无法读取信息，请手动填写",
+      });
     }
   }
   if (p === "/api/stats" && method === "GET") {

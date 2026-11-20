@@ -1,3 +1,4 @@
+import { xhsText, xhsUrl, douyinText, douyinUrl } from "./share-fixtures.mjs";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { build } from "esbuild";
@@ -186,6 +187,47 @@ test("editor supports Enter tags, reusable tags, platform links, date precision 
     await waitFor(() =>
       assert.equal(screen.getByLabelText(/标题 \*/).value, "自动标题"),
     );
+    cleanup();
+    const mountEmpty = () =>
+      render(
+        React.createElement(Editor, {
+          entry: null,
+          close() {},
+          saved: async () => {},
+          busy: false,
+          setBusy() {},
+          tagOptions: { material: [], fanwork: [] },
+          knownPlatforms: [],
+        }),
+      );
+    mountEmpty();
+    await user.click(
+      screen.getByRole("checkbox", { name: "小红书", exact: true }),
+    );
+    await user.click(screen.getByLabelText("小红书链接 1"));
+    await user.paste(xhsText);
+    assert.equal(screen.getByLabelText("小红书链接 1").value, xhsUrl);
+    assert.equal(screen.getByLabelText(/标题 \*/).value, "生日快乐🎂");
+    assert.equal(screen.getByLabelText("原作者 / 发布者").value, "ottel9ka");
+    await user.click(screen.getByLabelText("小红书链接 1"));
+    await user.paste(douyinText);
+    assert.equal(screen.getByLabelText("小红书链接 1").value, douyinUrl);
+    assert.equal(screen.getByLabelText(/标题 \*/).value, "生日快乐🎂");
+    assert.equal(screen.getByLabelText("原作者 / 发布者").value, "ottel9ka");
+    const backupInput = screen.getByPlaceholderText("例如仅自己可见的微博链接");
+    await user.click(backupInput);
+    await user.paste(douyinText);
+    assert.equal(backupInput.value, douyinUrl);
+    cleanup();
+    mountEmpty();
+    await user.click(
+      screen.getByRole("checkbox", { name: "抖音", exact: true }),
+    );
+    await user.click(screen.getByLabelText("抖音链接 1"));
+    await user.paste(douyinText);
+    assert.equal(screen.getByLabelText("抖音链接 1").value, douyinUrl);
+    assert.equal(screen.getByLabelText("原作者 / 发布者").value, "苏苿兮🌸");
+    assert.match(screen.getByLabelText(/标题 \*/).value, /第 39 届/);
   } finally {
     cleanup();
     dom.window.close();
