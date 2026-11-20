@@ -79,6 +79,28 @@ test("password sessions, CRUD, search, private image storage and export", async 
       "微博",
     );
     await db.prepare("DELETE FROM entries WHERE id='legacy'").run();
+    await db
+      .prepare(
+        "INSERT INTO entries(id,type,title,content,created_at,updated_at) VALUES('migration-fiction','fiction','旧文稿','旧正文','2020-01-01','2020-01-01')",
+      )
+      .run();
+    await db.exec(
+      (await readFile("migrations/0003_chapters.sql", "utf8")).replace(
+        /\n/g,
+        " ",
+      ),
+    );
+    assert.equal(
+      (
+        await db
+          .prepare(
+            "SELECT content FROM chapters WHERE entry_id='migration-fiction'",
+          )
+          .first()
+      ).content,
+      "旧正文",
+    );
+    await db.prepare("DELETE FROM entries WHERE id='migration-fiction'").run();
     const request = async (path, opts = {}) => {
       if (opts.body instanceof FormData) {
         const serialized = new Request("https://archive.test", {
@@ -377,6 +399,58 @@ test("password sessions, CRUD, search, private image storage and export", async 
       (await request("/api/images/" + imageId, { headers: { Cookie: cookie } }))
         .status,
       404,
+    );
+    const fullChapters = [
+      { title: "首章", content: "甲 ".repeat(1200) },
+      { title: "次章", content: "乙\n丙" },
+    ];
+    const novelId = (
+      await api("/entries", {
+        method: "POST",
+        body: JSON.stringify({
+          ...record,
+          content: "",
+          chapters: fullChapters,
+        }),
+      })
+    ).data.id;
+    let novel = (await api("/entries")).data.items[0];
+    assert.equal(novel.chapter_count, 2);
+    assert.equal(novel.word_count, 1202);
+    assert.equal(novel.chapters, undefined);
+    assert.ok(novel.content.length <= 1000);
+    let detail = (await api("/entries/" + novelId)).data;
+    assert.equal(detail.chapters.length, 2);
+    assert.equal(detail.chapters[0].content, fullChapters[0].content.trim());
+    assert.equal((await api("/entries?q=乙")).data.items[0].id, novelId);
+    await api("/entries/" + novelId, {
+      method: "PATCH",
+      body: JSON.stringify({ starred: false }),
+    });
+    assert.equal(
+      (await api("/entries/" + novelId)).data.chapters[0].content,
+      fullChapters[0].content.trim(),
+    );
+    await api("/entries/" + novelId, {
+      method: "PUT",
+      body: JSON.stringify({
+        ...detail,
+        chapters: [detail.chapters[1], detail.chapters[0]],
+      }),
+    });
+    detail = (await api("/entries/" + novelId)).data;
+    assert.equal(detail.chapters[0].title, "次章");
+    assert.equal(detail.word_count, 1202);
+    assert.equal((await api("/export")).data.entries[0].chapters.length, 2);
+    await api("/entries/" + novelId, {
+      method: "PUT",
+      body: JSON.stringify({ ...detail, chapters: [detail.chapters[0]] }),
+    });
+    assert.equal((await api("/entries")).data.items[0].chapter_count, 1);
+    await api("/entries/" + novelId, { method: "DELETE" });
+    assert.equal(
+      (await db.prepare("SELECT COUNT(*) AS n FROM chapters").first()).n,
+      0,
     );
   } finally {
     await mf.dispose();

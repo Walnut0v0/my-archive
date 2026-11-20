@@ -44,6 +44,7 @@ import {
 } from "./model";
 import { api } from "./client";
 import { Editor } from "./Editor";
+import { Reader } from "./Reader";
 interface Stats {
   total: number;
   starred: number;
@@ -222,11 +223,24 @@ function App() {
       setBusy(false);
     }
   }
+  async function openEntry(e: Entry, mode: "edit" | "read") {
+    if (busy) return;
+    setBusy(true);
+    try {
+      const full = await api<Entry>("/entries/" + e.id);
+      if (mode === "edit") setEditor(full);
+      else setReader(full);
+    } catch (err) {
+      toast((err as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
   async function star(e: Entry) {
     try {
       await api("/entries/" + e.id, {
-        method: "PUT",
-        body: JSON.stringify({ ...e, starred: !e.starred }),
+        method: "PATCH",
+        body: JSON.stringify({ starred: !e.starred }),
       });
       await reload();
     } catch (err) {
@@ -656,7 +670,7 @@ function App() {
                             <div className="dropdown">
                               <button
                                 onClick={() => {
-                                  setEditor(e);
+                                  void openEntry(e, "edit");
                                   setMenu("");
                                 }}
                               >
@@ -677,18 +691,24 @@ function App() {
                         </div>
                       </div>
                       <h2>{e.title}</h2>
+                      {e.type === "fiction" && !e.chapter_count && (
+                        <p className="fiction-stats">
+                          0 章 · 0 字（未保存正文）
+                        </p>
+                      )}
                       {e.notes && <p className="card-notes">{e.notes}</p>}
-                      {e.type === "fiction" && e.content && (
+                      {e.type === "fiction" && e.chapter_count > 0 && (
                         <button
                           className="article-preview"
-                          onClick={() => setReader(e)}
+                          onClick={() => void openEntry(e, "read")}
                         >
                           <div className="book-cover">
                             <BookOpen size={27} />
                           </div>
                           <div>
                             <span>
-                              存档文稿 · {e.content.length.toLocaleString()} 字
+                              {e.chapter_count} 章 ·{" "}
+                              {e.word_count.toLocaleString()} 字
                             </span>
                             <strong>{e.title}</strong>
                             <p>{e.content.slice(0, 100)}</p>
@@ -793,8 +813,8 @@ function App() {
                       </div>
                       <footer>
                         <div>
-                          {e.type === "fiction" && e.content && (
-                            <button onClick={() => setReader(e)}>
+                          {e.type === "fiction" && e.chapter_count > 0 && (
+                            <button onClick={() => void openEntry(e, "read")}>
                               <BookOpen size={15} />
                               阅读
                             </button>
@@ -992,75 +1012,6 @@ function App() {
         </div>
       )}
     </>
-  );
-}
-function Reader({ entry, close }: { entry: Entry; close: () => void }) {
-  const [font, setFont] = useState(19),
-    [dark, setDark] = useState(false),
-    [line, setLine] = useState("2");
-  return (
-    <section
-      className={"reader " + (dark ? "dark" : "")}
-      role="dialog"
-      aria-modal="true"
-      aria-label="沉浸式阅读"
-    >
-      <header>
-        <button onClick={close}>
-          <ArrowLeft size={19} />
-          <span>返回收藏</span>
-        </button>
-        <div>
-          <button
-            aria-label="减小字号"
-            onClick={() => setFont(Math.max(14, font - 1))}
-          >
-            A−
-          </button>
-          <span>{font}</span>
-          <button
-            aria-label="增大字号"
-            onClick={() => setFont(Math.min(30, font + 1))}
-          >
-            A+
-          </button>
-          <select
-            aria-label="阅读行距"
-            value={line}
-            onChange={(e) => setLine(e.target.value)}
-          >
-            <option value="1.6">紧凑</option>
-            <option value="2">舒适</option>
-            <option value="2.5">宽松</option>
-          </select>
-          <button onClick={() => setDark(!dark)} aria-label="切换阅读背景">
-            {dark ? <Sun size={19} /> : <Moon size={19} />}
-          </button>
-        </div>
-      </header>
-      <article>
-        <div className="eyebrow">拾藏 · 存档文稿</div>
-        <h1>{entry.title}</h1>
-        <p className="reader-byline">
-          {entry.author || "作者未注明"} ·{" "}
-          {entry.content.length.toLocaleString()} 字
-        </p>
-        <div
-          className="reader-content"
-          style={{ fontSize: font, lineHeight: line }}
-        >
-          {entry.content}
-        </div>
-        <div className="reader-end">
-          — 全文完 —
-          {entry.url && (
-            <a href={entry.url} target="_blank" rel="noreferrer">
-              前往原文 <ArrowUpRight size={15} />
-            </a>
-          )}
-        </div>
-      </article>
-    </section>
   );
 }
 function Lightbox({

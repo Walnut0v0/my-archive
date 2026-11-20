@@ -1,5 +1,10 @@
 import { SignJWT, jwtVerify } from "jose";
-import { publication, platformFor } from "../src/model";
+import {
+  publication,
+  platformFor,
+  countCharacters,
+  type Chapter,
+} from "../src/model";
 import { readPageMetadata } from "./metadata";
 import { extractSharedUrl, parseSharedText } from "../src/share";
 interface Env {
@@ -113,6 +118,28 @@ function normalize(b: Record<string, unknown>) {
     ? [...new Set(b.tags.map((t) => clean(t, 40)).filter(Boolean))]
     : [];
   if (tags.length > 30) fail(400, "最多添加 30 个标签");
+  const chapters = (
+    b.type === "fiction" && Array.isArray(b.chapters)
+      ? b.chapters.map((c: any) => ({
+          id: crypto.randomUUID(),
+          title: clean(c?.title, 200),
+          content: clean(c?.content, 500000),
+        }))
+      : b.type === "fiction" && b.content
+        ? [
+            {
+              id: crypto.randomUUID(),
+              title: "正文",
+              content: clean(b.content, 1_000_000),
+            },
+          ]
+        : []
+  ).filter((c) => c.title || c.content);
+  if (
+    chapters.length > 200 ||
+    chapters.reduce((n, c) => n + c.content.length, 0) > 1_000_000
+  )
+    fail(400, "最多 200 章，总正文不超过 100 万字符");
   return {
     type: String(b.type),
     title: clean(b.title, 200, true),
@@ -124,7 +151,11 @@ function normalize(b: Record<string, unknown>) {
     published_start: published.start,
     published_end: published.end,
     notes: clean(b.notes, 10000),
-    content: clean(b.content, 1_000_000),
+    content:
+      b.type === "fiction"
+        ? chapters.find((c) => c.content)?.content.slice(0, 1000) || ""
+        : clean(b.content, 1_000_000),
+    chapters,
     tags: JSON.stringify(tags),
     starred: b.starred ? 1 : 0,
   };
@@ -136,20 +167,83 @@ async function entry(env: Env, id: string) {
   if (!r) fail(404, "收藏不存在或已被删除");
   return r!;
 }
-async function inflate(env: Env, rows: Record<string, unknown>[]) {
+async function inflate(
+  env: Env,
+  rows: Record<string, unknown>[],
+  full = false,
+) {
   if (!rows.length) return [];
   const { results } = await env.DB.prepare(
     `SELECT * FROM images WHERE entry_id IN (${rows.map(() => "?").join(",")}) ORDER BY created_at,id`,
   )
     .bind(...rows.map((r) => r.id))
     .all();
+  const counts = (
+    await env.DB.prepare(
+      `SELECT entry_id,COUNT(*) AS chapter_count,SUM(word_count) AS word_count FROM chapters WHERE entry_id IN (${rows.map(() => "?").join(",")}) GROUP BY entry_id`,
+    )
+      .bind(...rows.map((r) => r.id))
+      .all()
+  ).results;
+  const chapters = full
+    ? (
+        await env.DB.prepare(
+          `SELECT * FROM chapters WHERE entry_id IN (${rows.map(() => "?").join(",")}) ORDER BY position`,
+        )
+          .bind(...rows.map((r) => r.id))
+          .all()
+      ).results
+    : [];
   return rows.map((r) => ({
     ...r,
+    chapter_count: counts.find((c) => c.entry_id === r.id)?.chapter_count || 0,
+    word_count: counts.find((c) => c.entry_id === r.id)?.word_count || 0,
+    ...(full
+      ? {
+          chapters: chapters.filter((c) => c.entry_id === r.id),
+          content: chapters.some((c) => c.entry_id === r.id)
+            ? chapters
+                .filter((c) => c.entry_id === r.id)
+                .map((c) => c.content)
+                .join("\n\n")
+            : r.content,
+        }
+      : {}),
     tags: JSON.parse(String(r.tags)),
     links: JSON.parse(String(r.links || "[]")),
     starred: !!r.starred,
     images: results.filter((i) => i.entry_id === r.id),
   }));
+}
+function chapterStatements(env: Env, id: string, chapters: Chapter[]) {
+  const groups: Chapter[][] = [];
+  let current: Chapter[] = [];
+  let bytes = 0;
+  for (const c of chapters) {
+    const size = new TextEncoder().encode(JSON.stringify(c)).length;
+    if (current.length && bytes + size > 1_000_000) {
+      groups.push(current);
+      current = [];
+      bytes = 0;
+    }
+    current.push(c);
+    bytes += size;
+  }
+  if (current.length) groups.push(current);
+  let position = 0;
+  return [
+    env.DB.prepare("DELETE FROM chapters WHERE entry_id=?").bind(id),
+    ...groups.map((group) => {
+      const data = group.map((c) => ({
+        ...c,
+        position: position++,
+        word_count: countCharacters(c.content),
+      }));
+      return env.DB.prepare(
+        "INSERT INTO chapters(id,entry_id,position,title,content,word_count) SELECT json_extract(value,'$.id'),?,json_extract(value,'$.position'),json_extract(value,'$.title'),json_extract(value,'$.content'),json_extract(value,'$.word_count') FROM json_each(?)",
+      ).bind(id, JSON.stringify(data));
+    }),
+  ];
 }
 function imageMime(b: Uint8Array) {
   if (b[0] === 255 && b[1] === 216 && b[2] === 255) return "image/jpeg";
@@ -256,10 +350,10 @@ async function api(req: Request, env: Env) {
     const q = u.searchParams.get("q")?.slice(0, 200);
     if (q) {
       clauses.push(
-        "(title LIKE ? ESCAPE '\\' OR author LIKE ? ESCAPE '\\' OR notes LIKE ? ESCAPE '\\' OR content LIKE ? ESCAPE '\\' OR tags LIKE ? ESCAPE '\\')",
+        "(title LIKE ? ESCAPE '\\' OR author LIKE ? ESCAPE '\\' OR notes LIKE ? ESCAPE '\\' OR content LIKE ? ESCAPE '\\' OR tags LIKE ? ESCAPE '\\' OR EXISTS(SELECT 1 FROM chapters c WHERE c.entry_id=entries.id AND (c.content LIKE ? ESCAPE '\\' OR c.title LIKE ? ESCAPE '\\')))",
       );
       const pattern = "%" + q.replace(/[\\%_]/g, "\\$&") + "%";
-      args.push(...Array(5).fill(pattern));
+      args.push(...Array(7).fill(pattern));
     }
     const published = u.searchParams.get("basis") === "published";
     const from = u.searchParams.get("from"),
@@ -297,18 +391,56 @@ async function api(req: Request, env: Env) {
     // Batched hydration avoids SQLite's bound-variable limit on large libraries.
     const entries = [];
     for (let i = 0; i < rows.results.length; i += 80)
-      entries.push(...(await inflate(env, rows.results.slice(i, i + 80))));
+      entries.push(
+        ...(await inflate(env, rows.results.slice(i, i + 80), true)),
+      );
     return json({ version: 1, exported_at: new Date().toISOString(), entries });
   }
   if (p === "/api/entries" && method === "POST") {
     const b = normalize(await body(req)),
       id = crypto.randomUUID(),
       now = new Date().toISOString();
-    await env.DB.prepare(
+    const insert = env.DB.prepare(
       "INSERT INTO entries(id,type,title,author,url,notes,content,tags,starred,created_at,updated_at,links,backup_url,published_date,published_start,published_end) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-    )
-      .bind(
-        id,
+    ).bind(
+      id,
+      b.type,
+      b.title,
+      b.author,
+      b.url,
+      b.notes,
+      b.content,
+      b.tags,
+      b.starred,
+      now,
+      now,
+      b.links,
+      b.backup_url,
+      b.published_date,
+      b.published_start,
+      b.published_end,
+    );
+    await env.DB.batch([insert, ...chapterStatements(env, id, b.chapters)]);
+    return json({ id }, 201);
+  }
+  const match = p.match(/^\/api\/entries\/([a-f0-9-]+)$/);
+  if (match) {
+    const id = match[1];
+    const existing = await entry(env, id);
+    if (method === "GET")
+      return json((await inflate(env, [existing], true))[0]);
+    if (method === "PATCH") {
+      const input = await body(req);
+      await env.DB.prepare("UPDATE entries SET starred=? WHERE id=?")
+        .bind(input.starred ? 1 : 0, id)
+        .run();
+      return json({ ok: true });
+    }
+    if (method === "PUT") {
+      const b = normalize(await body(req));
+      const update = env.DB.prepare(
+        "UPDATE entries SET type=?,title=?,author=?,url=?,notes=?,content=?,tags=?,starred=?,updated_at=?,links=?,backup_url=?,published_date=?,published_start=?,published_end=? WHERE id=?",
+      ).bind(
         b.type,
         b.title,
         b.author,
@@ -317,44 +449,15 @@ async function api(req: Request, env: Env) {
         b.content,
         b.tags,
         b.starred,
-        now,
-        now,
+        new Date().toISOString(),
         b.links,
         b.backup_url,
         b.published_date,
         b.published_start,
         b.published_end,
-      )
-      .run();
-    return json({ id }, 201);
-  }
-  const match = p.match(/^\/api\/entries\/([a-f0-9-]+)$/);
-  if (match) {
-    const id = match[1];
-    await entry(env, id);
-    if (method === "PUT") {
-      const b = normalize(await body(req));
-      await env.DB.prepare(
-        "UPDATE entries SET type=?,title=?,author=?,url=?,notes=?,content=?,tags=?,starred=?,updated_at=?,links=?,backup_url=?,published_date=?,published_start=?,published_end=? WHERE id=?",
-      )
-        .bind(
-          b.type,
-          b.title,
-          b.author,
-          b.url,
-          b.notes,
-          b.content,
-          b.tags,
-          b.starred,
-          new Date().toISOString(),
-          b.links,
-          b.backup_url,
-          b.published_date,
-          b.published_start,
-          b.published_end,
-          id,
-        )
-        .run();
+        id,
+      );
+      await env.DB.batch([update, ...chapterStatements(env, id, b.chapters)]);
       return json({ ok: true });
     }
     if (method === "DELETE") {

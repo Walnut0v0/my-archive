@@ -9,6 +9,9 @@ import {
   Copy,
 } from "lucide-react";
 import { api } from "./client";
+import { parseAo3Html } from "./ao3";
+import { ChapterEditor } from "./ChapterEditor";
+import { type Chapter, chaptersFor, countCharacters } from "./model";
 import { extractSharedUrl, parseSharedText } from "./share";
 import {
   type Entry,
@@ -52,6 +55,73 @@ export function Editor({
     ...entry,
   });
   const knownTags = tagOptions[tagGroupFor(draft.type)];
+  const [chapters, setChapters] = useState<Chapter[]>(() => {
+    const existing = entry ? chaptersFor(entry) : [];
+    return existing.length
+      ? existing
+      : [{ id: crypto.randomUUID(), title: "", content: "" }];
+  });
+  const [importPreview, setImportPreview] = useState<ReturnType<
+    typeof parseAo3Html
+  > | null>(null);
+  const [importNote, setImportNote] = useState("");
+  function applyImport(data: ReturnType<typeof parseAo3Html>) {
+    setChapters(data.chapters);
+    setDraft((d) => ({
+      ...d,
+      title: d.title.trim() ? d.title : data.title,
+      author: d.author.trim() ? d.author : data.author,
+      notes: d.notes.trim() ? d.notes : data.notes.slice(0, 10000),
+      published_date: d.published_date || data.published_date,
+    }));
+    if (!draft.published_date && data.published_date) setPrecision("day");
+    if (data.url)
+      setLinks((v) =>
+        v.some((l) => l.url === data.url)
+          ? v
+          : v.some((l) => l.platform === "AO3" && !l.url)
+            ? v.map((l) =>
+                l.platform === "AO3" && !l.url ? { ...l, url: data.url } : l,
+              )
+            : [...v, { platform: "AO3", url: data.url }],
+      );
+    setImportNote(
+      `已导入 ${data.chapters.length} 章 · ${data.word_count.toLocaleString()} 字，保存收藏后生效`,
+    );
+    setImportPreview(null);
+  }
+  async function importFile(file: File | undefined) {
+    if (!file) return;
+    setErr("");
+    try {
+      if (file.size > 10 * 1024 * 1024) throw Error("导入文件最多 10 MB");
+      const text = await file.text();
+      const data = /\.html?$/i.test(file.name)
+        ? parseAo3Html(text)
+        : {
+            title: "",
+            author: "",
+            url: "",
+            published_date: "",
+            notes: "",
+            chapters: [
+              {
+                id: crypto.randomUUID(),
+                title: file.name.replace(/\.txt$/i, ""),
+                content: text,
+              },
+            ],
+            word_count: countCharacters(text),
+          };
+      if (data.chapters.reduce((n, c) => n + c.content.length, 0) > 1000000)
+        throw Error("文稿最多 100 万字符");
+      if (chapters.some((c) => c.content.trim() || c.title.trim()))
+        setImportPreview(data);
+      else applyImport(data);
+    } catch (e) {
+      setErr((e as Error).message);
+    }
+  }
   const [links, setLinks] = useState<SourceLink[]>(entry?.links || []),
     [tags, setTags] = useState<string[]>(entry?.tags || []),
     [tagInput, setTagInput] = useState(""),
@@ -218,6 +288,8 @@ export function Editor({
       ];
       const payload = {
         ...draft,
+        content: draft.type === "fiction" ? "" : draft.content,
+        chapters: draft.type === "fiction" ? chapters : [],
         links: links.filter((l) => l.url.trim()),
         tags: allTags,
       };
@@ -542,39 +614,49 @@ export function Editor({
             />
           </label>
           {draft.type === "fiction" && (
-            <div>
-              <label>
-                文稿正文
-                <textarea
-                  rows={9}
-                  maxLength={1000000}
-                  value={draft.content}
-                  onChange={(e) => field("content", e.target.value)}
-                  placeholder="粘贴正文（选填）"
-                />
-              </label>
-              <label className="text-import">
-                <Upload size={14} />
-                导入 TXT
+            <div className="fiction-editor">
+              <label className="file-import">
+                <Upload size={16} />
+                导入 AO3 HTML / TXT
                 <input
+                  aria-label="导入 AO3 HTML 或 TXT"
                   type="file"
-                  accept=".txt,text/plain"
-                  onChange={async (e) => {
-                    const f = e.target.files?.[0];
-                    if (!f) return;
-                    if (f.size > 3000000) {
-                      setErr("TXT 文件过大");
-                      return;
-                    }
-                    const text = await f.text();
-                    if (text.length > 1000000) {
-                      setErr("正文最多 100 万字");
-                      return;
-                    }
-                    field("content", text);
+                  accept=".html,.htm,.txt,text/html,text/plain"
+                  onChange={(e) => {
+                    void importFile(e.target.files?.[0]);
+                    e.target.value = "";
                   }}
                 />
               </label>
+              {importNote && (
+                <p role="status" className="metadata-note">
+                  {importNote}
+                </p>
+              )}
+              {importPreview && (
+                <div className="import-preview">
+                  <p>
+                    文件包含 {importPreview.chapters.length} 章 ·{" "}
+                    {importPreview.word_count.toLocaleString()}{" "}
+                    字。导入将替换当前章节，现有标题、作者等信息会保留。
+                  </p>
+                  <button
+                    type="button"
+                    className="primary"
+                    onClick={() => applyImport(importPreview)}
+                  >
+                    替换章节
+                  </button>
+                  <button
+                    type="button"
+                    className="secondary"
+                    onClick={() => setImportPreview(null)}
+                  >
+                    取消导入
+                  </button>
+                </div>
+              )}
+              <ChapterEditor chapters={chapters} onChange={setChapters} />
             </div>
           )}
           <label>

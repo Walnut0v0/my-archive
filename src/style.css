@@ -1815,3 +1815,107 @@ h1 > span {
   padding: 0 15px;
   margin: 12px 0 8px;
 }
+
+.chapter-editor {
+  margin: 20px 0;
+}
+.chapter-toolbar {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-bottom: 15px;
+}
+.chapter-toolbar h3 {
+  font-size: 16px;
+  font-weight: 500;
+  margin: 0;
+}
+.chapter-toolbar > span {
+  color: #76876b;
+  font-size: 13px;
+  margin-right: auto;
+}
+.chapter-controls {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-bottom: 16px;
+}
+.chapter-controls select {
+  flex: 1;
+  min-width: 100px;
+  border: 1px solid #d7dfd1;
+  padding: 10px;
+  border-radius: 6px;
+  background: transparent;
+  font-size: 14px;
+  max-width: 100%;
+}
+.chapter-controls button {
+  border: 1px solid #d7dfd1;
+  padding: 9px 12px;
+  border-radius: 6px;
+  background: transparent;
+  font-size: 13px;
+}
+.file-import {
+  display: flex !important;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid #d7dfd1;
+  border-radius: 6px;
+  padding: 12px;
+  cursor: pointer;
+  margin: 15px 0 !important;
+  width: fit-content;
+}
+.file-import input {
+  display: none;
+}
+.import-preview {
+  background: #eef3e8;
+  padding: 15px;
+  border-radius: 7px;
+  margin: 15px 0;
+  font-size: 14px;
+  line-height: 1.8;
+}
+.import-preview button {
+  margin-right: 8px;
+}
+.reader-navigation {
+  margin-top: 30px;
+}
+.reader-navigation select,
+.reader-navigation button {
+  color: inherit;
+}
+.reader-chapter-title {
+  font-size: 23px;
+  margin-top: 40px;
+  font-weight: 500;
+}
+.reader-content {
+  margin-top: 25px;
+}
+.reader-sources {
+  display: flex;
+  gap: 20px;
+  justify-content: center;
+  margin-top: 30px;
+  font-size: 14px;
+}
+.fiction-stats {
+  font-size: 13px;
+  color: #7e8b74;
+}
+.reader.dark .chapter-controls button,
+.reader.dark .chapter-controls select {
+  border-color: #59614f;
+}
+.reader.dark select option {
+  background: #242923;
+  color: #c1c9b6;
+}

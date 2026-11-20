@@ -80,6 +80,22 @@ export interface Entry {
   starred: boolean;
   created_at: string;
   images: Photo[];
+  chapters?: Chapter[];
+  chapter_count: number;
+  word_count: number;
+}
+
+export type Chapter = { id: string; title: string; content: string };
+export const countCharacters = (text: string) =>
+  Array.from(text.replace(/\s/gu, "")).length;
+export function chaptersFor(
+  entry: Pick<Entry, "chapters" | "content">,
+): Chapter[] {
+  return entry.chapters?.length
+    ? entry.chapters
+    : entry.content
+      ? [{ id: "legacy", title: "正文", content: entry.content }]
+      : [];
 }
 
 export type TagGroup = "material" | "fanwork";
