@@ -269,6 +269,56 @@ test("password sessions, CRUD, search, private image storage and export", async 
       yearId,
     );
     await api("/entries/" + yearId, { method: "DELETE" });
+    const materialId = (
+      await api("/entries", {
+        method: "POST",
+        body: JSON.stringify({
+          ...record,
+          type: "material",
+          tags: ["测试", "物料独有"],
+        }),
+      })
+    ).data.id;
+    const artId = (
+      await api("/entries", {
+        method: "POST",
+        body: JSON.stringify({
+          ...record,
+          type: "art",
+          tags: ["测试", "同人图独有"],
+        }),
+      })
+    ).data.id;
+    const grouped = (await api("/stats")).data.tags;
+    assert.equal(
+      grouped.find((t) => t.name === "测试" && t.tag_group === "material")
+        .count,
+      1,
+    );
+    assert.equal(
+      grouped.find((t) => t.name === "测试" && t.tag_group === "fanwork").count,
+      2,
+    );
+    assert.equal(
+      grouped.find((t) => t.name === "物料独有" && t.tag_group === "fanwork"),
+      undefined,
+    );
+    assert.deepEqual(
+      (await api("/entries?tag=测试&tag_group=material")).data.items.map(
+        (e) => e.id,
+      ),
+      [materialId],
+    );
+    assert.deepEqual(
+      new Set(
+        (await api("/entries?tag=测试&tag_group=fanwork")).data.items.map(
+          (e) => e.type,
+        ),
+      ),
+      new Set(["fiction", "art"]),
+    );
+    await api("/entries/" + materialId, { method: "DELETE" });
+    await api("/entries/" + artId, { method: "DELETE" });
     const videoData = Uint8Array.from([
       0, 0, 0, 24, 102, 116, 121, 112, 105, 115, 111, 109, 0, 0, 0, 0,
     ]);

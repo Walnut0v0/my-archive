@@ -80,3 +80,7 @@ export interface Entry {
   created_at: string;
   images: Photo[];
 }
+
+export type TagGroup = "material" | "fanwork";
+export const tagGroupFor = (kind: string): TagGroup =>
+  kind === "material" ? "material" : "fanwork";

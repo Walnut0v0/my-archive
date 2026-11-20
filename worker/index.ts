@@ -196,7 +196,7 @@ async function api(req: Request, env: Env) {
       "SELECT type,COUNT(*) AS count FROM entries GROUP BY type",
     ).all();
     const tags = await env.DB.prepare(
-      "SELECT j.value AS name, COUNT(*) AS count FROM entries e, json_each(e.tags) j GROUP BY j.value ORDER BY count DESC,name",
+      "SELECT CASE WHEN e.type='material' THEN 'material' ELSE 'fanwork' END AS tag_group, j.value AS name, COUNT(*) AS count FROM entries e, json_each(e.tags) j GROUP BY tag_group,j.value ORDER BY tag_group,count DESC,name",
     ).all();
     const usage = await env.DB.prepare(
       "SELECT bytes FROM storage_usage WHERE id=1",
@@ -227,6 +227,9 @@ async function api(req: Request, env: Env) {
         args.push(val);
       }
     }
+    const tagGroup = u.searchParams.get("tag_group");
+    if (tagGroup === "material") clauses.push("type='material'");
+    else if (tagGroup === "fanwork") clauses.push("type IN ('fiction','art')");
     const tag = u.searchParams.get("tag");
     if (tag) {
       clauses.push(

@@ -14,6 +14,8 @@ import {
   type Kind,
   type Photo,
   type SourceLink,
+  type TagGroup,
+  tagGroupFor,
   platformsFor,
   platformFor,
   publication,
@@ -26,7 +28,7 @@ export function Editor({
   saved,
   busy,
   setBusy,
-  knownTags,
+  tagOptions,
   knownPlatforms,
 }: {
   entry: Entry | null;
@@ -34,7 +36,7 @@ export function Editor({
   saved: () => Promise<void>;
   busy: boolean;
   setBusy: (b: boolean) => void;
-  knownTags: string[];
+  tagOptions: Record<TagGroup, string[]>;
   knownPlatforms: string[];
 }) {
   const [draft, setDraft] = useState({
@@ -48,6 +50,7 @@ export function Editor({
     published_date: "",
     ...entry,
   });
+  const knownTags = tagOptions[tagGroupFor(draft.type)];
   const [links, setLinks] = useState<SourceLink[]>(entry?.links || []),
     [tags, setTags] = useState<string[]>(entry?.tags || []),
     [tagInput, setTagInput] = useState(""),

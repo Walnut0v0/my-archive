@@ -39,6 +39,8 @@ import {
   type Entry,
   publicationLabel,
   videoFile,
+  type TagGroup,
+  tagGroupFor,
 } from "./model";
 import { api } from "./client";
 import { Editor } from "./Editor";
@@ -48,7 +50,7 @@ interface Stats {
   bytes: number;
   limit: number;
   counts: { type: Kind; count: number }[];
-  tags: { name: string; count: number }[];
+  tags: { name: string; count: number; tag_group: TagGroup }[];
   platforms: string[];
 }
 const kinds = {
@@ -89,6 +91,7 @@ function App() {
     [stats, setStats] = useState<Stats | null>(null),
     [category, setCategory] = useState("all"),
     [tag, setTag] = useState(""),
+    [tagGroup, setTagGroup] = useState<TagGroup>("material"),
     [query, setQuery] = useState(""),
     [search, setSearch] = useState(""),
     [order, setOrder] = useState("newest"),
@@ -126,13 +129,16 @@ function App() {
       const p = new URLSearchParams({ offset: String(offset), order, basis });
       if (category === "starred") p.set("starred", "1");
       else if (category !== "all") p.set("type", category);
-      if (tag) p.set("tag", tag);
+      if (tag) {
+        p.set("tag", tag);
+        p.set("tag_group", tagGroup);
+      }
       if (search) p.set("q", search);
       if (from) p.set("from", from);
       if (to) p.set("to", to);
       return p;
     },
-    [category, tag, search, order, from, to, basis],
+    [category, tag, search, order, from, to, basis, tagGroup],
   );
   const reload = useCallback(async () => {
     setLoading(true);
@@ -363,23 +369,43 @@ function App() {
           <Tag size={14} />
         </div>
         <div className="side-tags">
-          {stats?.tags.length ? (
-            stats.tags.map((t) => (
-              <button
-                key={t.name}
-                className={tag === t.name ? "selected" : ""}
-                onClick={() => {
-                  setTag(tag === t.name ? "" : t.name);
-                  setCategory("all");
-                }}
-              >
-                <span># {t.name}</span>
-                <small>{t.count}</small>
-              </button>
-            ))
-          ) : (
-            <p className="muted tiny">暂无标签</p>
-          )}
+          {(["material", "fanwork"] as TagGroup[])
+            .filter((group) =>
+              category === "material"
+                ? group === "material"
+                : category === "fiction" || category === "art"
+                  ? group === "fanwork"
+                  : true,
+            )
+            .map((group) => (
+              <section key={group} className="tag-group">
+                <h3>{group === "material" ? "物料标签" : "同人标签"}</h3>
+                {stats?.tags.filter((t) => t.tag_group === group).length ? (
+                  stats.tags
+                    .filter((t) => t.tag_group === group)
+                    .map((t) => (
+                      <button
+                        key={t.name}
+                        className={
+                          tag === t.name && tagGroup === group ? "selected" : ""
+                        }
+                        onClick={() => {
+                          setTag(
+                            tag === t.name && tagGroup === group ? "" : t.name,
+                          );
+                          setTagGroup(group);
+                          setCategory("all");
+                        }}
+                      >
+                        <span># {t.name}</span>
+                        <small>{t.count}</small>
+                      </button>
+                    ))
+                ) : (
+                  <p className="muted tiny">暂无标签</p>
+                )}
+              </section>
+            ))}
         </div>
         <div className="sidebar-bottom">
           <div className="private">
@@ -516,7 +542,8 @@ function App() {
           )}
           {tag && (
             <button className="tag-filter" onClick={() => setTag("")}>
-              # {tag} <X size={13} />
+              {tagGroup === "material" ? "物料" : "同人"} · # {tag}{" "}
+              <X size={13} />
             </button>
           )}
           <div className="list-heading">
@@ -715,6 +742,7 @@ function App() {
                               key={t}
                               onClick={() => {
                                 setTag(t);
+                                setTagGroup(tagGroupFor(e.type));
                                 setCategory("all");
                               }}
                             >
@@ -824,7 +852,16 @@ function App() {
           }}
           setBusy={setBusy}
           busy={busy}
-          knownTags={stats?.tags.map((t) => t.name) || []}
+          tagOptions={{
+            material:
+              stats?.tags
+                .filter((t) => t.tag_group === "material")
+                .map((t) => t.name) || [],
+            fanwork:
+              stats?.tags
+                .filter((t) => t.tag_group === "fanwork")
+                .map((t) => t.name) || [],
+          }}
           knownPlatforms={stats?.platforms || []}
         />
       )}

@@ -76,11 +76,26 @@ test("editor supports Enter tags, reusable tags, platform links, date precision 
       },
       busy: false,
       setBusy() {},
-      knownTags: ["旧标签", "角色A"],
+      tagOptions: { material: ["旧标签", "角色A"], fanwork: ["同人专用"] },
       knownPlatforms: ["自定义站"],
     }),
   );
   try {
+    assert.equal(screen.queryByRole("button", { name: "同人专用" }), null);
+    await user.click(
+      screen.getByRole("button", { name: "同人文", exact: true }),
+    );
+    assert.ok(screen.getByRole("button", { name: "同人专用" }));
+    assert.equal(
+      screen.queryByRole("button", { name: "旧标签", exact: true }),
+      null,
+    );
+    await user.click(
+      screen.getByRole("button", { name: "同人图", exact: true }),
+    );
+    assert.ok(screen.getByRole("button", { name: "同人专用" }));
+    await user.click(screen.getByRole("button", { name: "物料", exact: true }));
+    assert.ok(screen.getByRole("button", { name: "旧标签", exact: true }));
     await user.type(screen.getByLabelText("新增标签"), "新标签{Enter}");
     assert.ok(screen.getByRole("button", { name: "删除标签 新标签" }));
     assert.equal(screen.getByLabelText("新增标签").value, "");
@@ -155,7 +170,7 @@ test("editor supports Enter tags, reusable tags, platform links, date precision 
         saved: async () => {},
         busy: false,
         setBusy() {},
-        knownTags: [],
+        tagOptions: { material: [], fanwork: [] },
         knownPlatforms: [],
       }),
     );
